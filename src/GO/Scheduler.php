@@ -119,6 +119,7 @@ class Scheduler
      */
     public function php($script, $bin = null, $args = [], $id = null)
     {
+        //ray('Doing a php job');
         if (! is_string($script)) {
             throw new InvalidArgumentException('The script should be a valid path to a file.');
         }
@@ -126,8 +127,8 @@ class Scheduler
         $bin = $bin !== null && is_string($bin) && file_exists($bin) ?
             $bin : (PHP_BINARY === '' ? '/usr/bin/php' : PHP_BINARY);
 
-        $job = new Job($bin . ' ' . $script, $args, $id);
-
+        $job = new Job($bin . ' ' . $script, $args, $id, $this->config);
+        
         if (! file_exists($script)) {
             $this->pushFailedJob(
                 $job,

@@ -17,6 +17,13 @@ class Job
     private $id;
 
     /**
+     * config.
+     *
+     * @var array
+     */
+    private $config;
+
+    /**
      * Command to execute.
      *
      * @var mixed
@@ -72,6 +79,13 @@ class Job
      * @var string
      */
     private $lockFile;
+
+    /**
+     * Redis Lock.
+     *
+     * @var array
+     */
+    private $redisLock;
 
     /**
      * This could prevent the job to run.
@@ -150,7 +164,7 @@ class Job
      * @param  array            $args
      * @param  string           $id
      */
-    public function __construct($command, $args = [], $id = null)
+    public function __construct($command, $args = [], $id = null, $config=null)
     {
         if (is_string($id)) {
             $this->id = $id;
@@ -164,7 +178,7 @@ class Job
                 $this->id = spl_object_hash($command);
             }
         }
-
+        
         $this->creationTime = new DateTime('now');
 
         // initialize the directory path for lock files
@@ -172,6 +186,16 @@ class Job
 
         $this->command = $command;
         $this->args = $args;
+
+        if ($config!=null) {
+            $redLock = new RedLock([$config['redis']]);
+
+            $this->redisLock = $redLock->lock($id, 5000);
+            //ray('id :'.$id);
+            //ray($this->redisLock);
+        } else {
+            $this->redisLock = false;
+        }
     }
 
     /**
@@ -216,9 +240,9 @@ class Job
      */
     public function isOverlapping()
     {
-        return $this->lockFile &&
-               file_exists($this->lockFile) &&
-               call_user_func($this->whenOverlapping, filemtime($this->lockFile)) === false;
+        //ray($this->redisLock);
+        //ray('isOverlapping ? :'.is_array($this->redisLock));
+        return (is_array($this->redisLock));
     }
 
     /**
@@ -267,6 +291,7 @@ class Job
             trim($tempDir),
             trim($this->id) . '.lock',
         ]);
+
 
         if ($whenOverlapping) {
             $this->whenOverlapping = $whenOverlapping;
