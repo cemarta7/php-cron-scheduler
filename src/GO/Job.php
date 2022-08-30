@@ -88,6 +88,14 @@ class Job
     private $redisLock;
 
     /**
+     * Job schedule time.
+     *
+     * @var RedLock
+     */
+
+    private $redLock;
+
+    /**
      * This could prevent the job to run.
      * If true, the job will run (if due).
      *
@@ -188,13 +196,12 @@ class Job
         $this->args = $args;
 
         if ($config!=null) {
-            $redLock = new RedLock([$config['redis']]);
+            $this->redLock = new RedLock([$config['redis']]);
 
-            $this->redisLock = $redLock->lock($id, 5000);
-            //ray('id :'.$id);
-            //ray($this->redisLock);
+        //ray('id :'.$id);
+        //ray($this->redisLock);
         } else {
-            $this->redisLock = false;
+            $this->redLock = null;
         }
     }
 
@@ -240,9 +247,9 @@ class Job
      */
     public function isOverlapping()
     {
-        //ray($this->redisLock);
-        //ray('isOverlapping ? :'.is_array($this->redisLock));
-        return (is_array($this->redisLock));
+        //This will be a boolean when is overlapping
+        //ray('isOverlapping ? :'.!is_bool($this->redisLock));
+        return (is_bool($this->redisLock));
     }
 
     /**
@@ -292,6 +299,10 @@ class Job
             trim($this->id) . '.lock',
         ]);
 
+        if ($this->redLock!=null) {
+            $this->redisLock = $this->redLock->lock($this->id, 10000);
+        }
+        
 
         if ($whenOverlapping) {
             $this->whenOverlapping = $whenOverlapping;
@@ -319,12 +330,22 @@ class Job
         }
 
         // Augment with any supplied arguments
-        foreach ($this->args as $key => $value) {
-            $compiled .= ' ' . escapeshellarg($key);
-            if ($value !== null) {
-                $compiled .= ' ' . escapeshellarg($value);
+        if (is_array($this->args) && isset($this->args[0])) {
+            foreach ($this->args as $value) {
+                if ($value !== null) {
+                    $compiled .= ' ' . $value;
+                }
+            }
+        } else {
+            foreach ($this->args as $key => $value) {
+                $compiled .= ' ' . escapeshellarg($key);
+                if ($value !== null) {
+                    $compiled .= ' ' . escapeshellarg($value);
+                }
             }
         }
+
+       
 
         // Add the boilerplate to redirect the output to file/s
         if (count($this->outputTo) > 0) {
@@ -341,6 +362,13 @@ class Job
         if ($this->lockFile) {
             $compiled .= '; rm ' . $this->lockFile;
         }
+
+        /*
+        if ($this->redLock!=null && is_array($this->redisLock)) {
+            ray('unlock redis');
+            $this->redLock->unlock($this->redisLock);
+        }
+        */
 
         // Add boilerplate to run in background
         if ($this->canRunInBackground()) {
@@ -411,7 +439,7 @@ class Job
         $this->createLockFile();
 
         if (is_callable($this->before)) {
-            call_user_func($this->before);
+            call_user_func($this->before, $this);
         }
 
         if (is_callable($compiled)) {
@@ -548,7 +576,7 @@ class Job
 
         // Call any callback defined
         if (is_callable($this->after)) {
-            call_user_func($this->after, $this->output, $this->returnCode);
+            call_user_func($this->after, $this, $this->output, $this->returnCode);
         }
     }
 
