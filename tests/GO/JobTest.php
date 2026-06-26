@@ -2,6 +2,7 @@
 
 use GO\Job;
 use PHPUnit\Framework\TestCase;
+use Tests\FakeRedis;
 
 class JobTest extends TestCase
 {
@@ -109,7 +110,7 @@ class JobTest extends TestCase
     public function testShouldRunInBackground()
     {
         // This script has a 5 seconds sleep
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../async_job.php');
         $job = new Job($command);
 
         $startTime = microtime(true);
@@ -168,154 +169,78 @@ class JobTest extends TestCase
         ]);
     }
 
-    public function testShouldCreateLockFileIfOnlyOne()
+    public function testShouldRequireRedisConfigurationForOnlyOneLocks()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
+        $this->expectException(\InvalidArgumentException::class);
 
-        // Default temp dir
-        $tmpDir = sys_get_temp_dir();
-        $lockFile = $tmpDir . '/' . $job->getId() . '.lock';
-
-        @unlink($lockFile);
-
-        $this->assertFalse(file_exists($lockFile));
-
-        $job->onlyOne()->run();
-
-        $this->assertTrue(file_exists($lockFile));
-    }
-
-    public function testShouldCreateLockFilesInCustomPath()
-    {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
-
-        // Default temp dir
-        $tmpDir = __DIR__ . '/../tmp';
-        $lockFile = $tmpDir . '/' . $job->getId() . '.lock';
-
-        @unlink($lockFile);
-
-        $this->assertFalse(file_exists($lockFile));
-
-        $job->onlyOne($tmpDir)->run();
-
-        $this->assertTrue(file_exists($lockFile));
-    }
-
-    public function testShouldRemoveLockFileAfterRunningClosures()
-    {
         $job = new Job(function () {
-            sleep(3);
+            return true;
         });
 
-        // Default temp dir
-        $tmpDir = __DIR__ . '/../tmp';
-        $lockFile = $tmpDir . '/' . $job->getId() . '.lock';
-
-        $job->onlyOne($tmpDir)->run();
-
-        $this->assertFalse(file_exists($lockFile));
+        $job->onlyOne()->run();
     }
 
-    public function testShouldRemoveLockFileAfterRunningCommands()
+    public function testShouldPreventOverlappingWithRedisLock()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
+        $redis = new FakeRedis();
+        $secondRun = null;
 
-        // Default temp dir
-        $tmpDir = __DIR__ . '/../tmp';
-        $lockFile = $tmpDir . '/' . $job->getId() . '.lock';
+        $secondJob = (new Job(function () {
+            return true;
+        }, [], 'shared-job'))->configure([
+            'redis' => ['client' => $redis],
+        ])->onlyOne();
 
-        $job->onlyOne($tmpDir)->run();
+        $firstJob = (new Job(function () use ($secondJob, &$secondRun) {
+            $secondRun = $secondJob->run();
+        }, [], 'shared-job'))->configure([
+            'redis' => ['client' => $redis],
+        ])->onlyOne();
 
-        sleep(1);
-
-        $this->assertTrue(file_exists($lockFile));
-
-        sleep(5);
-
-        $this->assertFalse(file_exists($lockFile));
+        $this->assertTrue($firstJob->run());
+        $this->assertFalse($secondRun);
+        $this->assertFalse($firstJob->isOverlapping());
     }
 
-    public function testShouldKnowIfOverlapping()
+    public function testShouldKnowIfRedisLockIsOverlapping()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
+        $redis = new FakeRedis();
+        $job = (new Job(function () {
+            return true;
+        }, [], 'redis-overlap'))->configure([
+            'redis' => ['client' => $redis],
+        ])->onlyOne();
 
         $this->assertFalse($job->isOverlapping());
 
-        $tmpDir = __DIR__ . '/../tmp';
-
-        $job->onlyOne($tmpDir)->run();
-
-        sleep(1);
+        $redis->set('php-cron-scheduler:locks:redis-overlap', 'token', ['nx', 'ex' => 60]);
 
         $this->assertTrue($job->isOverlapping());
-
-        sleep(5);
-
-        $this->assertFalse($job->isOverlapping());
     }
 
-    public function testShouldNotRunIfOverlapping()
+    public function testShouldForceRedisLockedCommandsToRunInForeground()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
+        $job = (new Job('ls'))->configure([
+            'redis' => ['client' => new FakeRedis()],
+        ]);
 
-        $this->assertFalse($job->isOverlapping());
+        $this->assertTrue($job->canRunInBackground());
+        $this->assertFalse($job->onlyOne()->canRunInBackground());
+        $this->assertEquals('ls', $job->compile());
+    }
 
-        $tmpDir = __DIR__ . '/../tmp';
-
-        $job->onlyOne($tmpDir);
-
-        sleep(1);
+    public function testShouldNotRunMoreOftenThanCooldown()
+    {
+        $runs = 0;
+        $job = (new Job(function () use (&$runs) {
+            $runs++;
+        }, [], 'cooldown-job'))->configure([
+            'redis' => ['client' => new FakeRedis()],
+        ])->runAtMostEvery(300);
 
         $this->assertTrue($job->run());
         $this->assertFalse($job->run());
-
-        sleep(6);
-        $this->assertTrue($job->run());
-    }
-
-    public function testShouldRunIfOverlappingCallbackReturnsTrue()
-    {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
-
-        $this->assertFalse($job->isOverlapping());
-
-        $tmpDir = __DIR__ . '/../tmp';
-
-        $job->onlyOne($tmpDir, function ($lastExecution) {
-            return time() - $lastExecution > 2;
-        })->run();
-
-        // The job should not run as it is overlapping
-        $this->assertFalse($job->run());
-        sleep(3);
-        // The job should run now as the function should now return true,
-        // while it's still being executed
-        $lockFile = $tmpDir . '/' . $job->getId() . '.lock';
-        $this->assertTrue(file_exists($lockFile));
-        $this->assertTrue($job->run());
-    }
-
-    public function testShouldAcceptTempDirInConfiguration()
-    {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
-        $job = new Job($command);
-
-        $tmpDir = __DIR__ . '/../tmp';
-
-        $job->configure([
-            'tempDir' => $tmpDir,
-        ])->onlyOne()->run();
-
-        sleep(1);
-
-        $this->assertTrue(file_exists($tmpDir . '/' . $job->getId() . '.lock'));
+        $this->assertEquals(1, $runs);
     }
 
     public function testWhenMethodShouldBeChainable()
@@ -354,7 +279,7 @@ class JobTest extends TestCase
         $job2->run();
         $this->assertEquals('hello', $job2->getOutput());
 
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $job3 = new Job($command);
         $job3->inForeground()->run();
         $this->assertEquals(['hi'], $job3->getOutput());
@@ -394,7 +319,7 @@ class JobTest extends TestCase
 
         $this->assertEquals($jobResult, $job->getOutput());
 
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $job2 = new Job($command);
 
         $job2Result = null;
@@ -416,7 +341,7 @@ class JobTest extends TestCase
 
     public function testThenMethodShouldPassReturnCode()
     {
-        $command_success = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command_success = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $command_fail = $command_success . ' fail';
 
         $run = function ($command) {

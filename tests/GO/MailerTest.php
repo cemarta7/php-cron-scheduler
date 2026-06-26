@@ -49,7 +49,7 @@ class MailerTest extends TestCase
     public function testShouldSendJobOutputToEmail()
     {
         $emailAddress = 'local@localhost.com';
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $job1 = new Job($command);
 
         $job2 = new Job(function () {
@@ -76,7 +76,7 @@ class MailerTest extends TestCase
     public function testShouldSendMultipleFilesToEmail()
     {
         $emailAddress = 'local@localhost.com';
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../async_job.php');
         $job = new Job($command);
 
         $outputFile1 = __DIR__ . '/../tmp/output003.log';
@@ -101,7 +101,7 @@ class MailerTest extends TestCase
     {
         $emailAddress1 = 'local@localhost.com';
         $emailAddress2 = 'local1@localhost.com';
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../async_job.php');
         $job = new Job($command);
 
         $outputFile = __DIR__ . '/../tmp/output005.log';
@@ -123,7 +123,7 @@ class MailerTest extends TestCase
     public function testShouldAcceptCustomEmailConfig()
     {
         $emailAddress = 'local@localhost.com';
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../async_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../async_job.php');
         $job = new Job($command);
 
         $outputFile = __DIR__ . '/../tmp/output6.log';

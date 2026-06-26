@@ -119,7 +119,6 @@ class Scheduler
      */
     public function php($script, $bin = null, $args = [], $id = null)
     {
-        //ray('Doing a php job');
         if (! is_string($script)) {
             throw new InvalidArgumentException('The script should be a valid path to a file.');
         }
@@ -127,7 +126,7 @@ class Scheduler
         $bin = $bin !== null && is_string($bin) && file_exists($bin) ?
             $bin : (PHP_BINARY === '' ? '/usr/bin/php' : PHP_BINARY);
 
-        $job = new Job($bin . ' ' . $script, $args, $id, $this->config);
+        $job = new Job(escapeshellarg($bin) . ' ' . escapeshellarg($script), $args, $id);
         
         if (! file_exists($script)) {
             $this->pushFailedJob(
@@ -175,8 +174,9 @@ class Scheduler
         foreach ($jobs as $job) {
             if ($job->isDue($runTime)) {
                 try {
-                    $job->run();
-                    $this->pushExecutedJob($job);
+                    if ($job->run()) {
+                        $this->pushExecutedJob($job);
+                    }
                 } catch (\Exception $e) {
                     $this->pushFailedJob($job, $e);
                 }

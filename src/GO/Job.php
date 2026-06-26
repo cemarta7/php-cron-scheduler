@@ -17,13 +17,6 @@ class Job
     private $id;
 
     /**
-     * config.
-     *
-     * @var array
-     */
-    private $config;
-
-    /**
      * Command to execute.
      *
      * @var mixed
@@ -66,34 +59,39 @@ class Job
     private $executionYear = null;
 
     /**
-     * Temporary directory path for
-     * lock files to prevent overlapping.
+     * Temporary directory path.
      *
      * @var string
      */
     private $tempDir;
 
     /**
-     * Path to the lock file.
+     * Redis lock manager.
      *
-     * @var string
-     */
-    private $lockFile;
-
-    /**
-     * Redis Lock.
-     *
-     * @var array
+     * @var RedisLock
      */
     private $redisLock;
 
     /**
-     * Job schedule time.
+     * Defines if overlapping executions should be prevented.
      *
-     * @var RedLock
+     * @var bool
      */
+    private $preventOverlapping = false;
 
-    private $redLock;
+    /**
+     * Redis overlap lock TTL in seconds.
+     *
+     * @var int
+     */
+    private $lockTtl = 3600;
+
+    /**
+     * Minimum number of seconds between job starts.
+     *
+     * @var int|null
+     */
+    private $cooldownTtl;
 
     /**
      * This could prevent the job to run.
@@ -153,14 +151,6 @@ class Job
     private $after;
 
     /**
-     * A function to ignore an overlapping job.
-     * If true, the job will run also if it's overlapping.
-     *
-     * @var callable
-     */
-    private $whenOverlapping;
-
-    /**
      * @var string
      */
     private $outputMode;
@@ -172,7 +162,7 @@ class Job
      * @param  array            $args
      * @param  string           $id
      */
-    public function __construct($command, $args = [], $id = null, $config=null)
+    public function __construct($command, $args = [], $id = null, $config = null)
     {
         if (is_string($id)) {
             $this->id = $id;
@@ -186,7 +176,7 @@ class Job
                 $this->id = spl_object_hash($command);
             }
         }
-        
+
         $this->creationTime = new DateTime('now');
 
         // initialize the directory path for lock files
@@ -195,13 +185,8 @@ class Job
         $this->command = $command;
         $this->args = $args;
 
-        if ($config!=null) {
-            $this->redLock = new RedLock([$config['redis']]);
-
-        //ray('id :'.$id);
-        //ray($this->redisLock);
-        } else {
-            $this->redLock = null;
+        if ($config !== null) {
+            $this->configure($config);
         }
     }
 
@@ -247,9 +232,11 @@ class Job
      */
     public function isOverlapping()
     {
-        //This will be a boolean when is overlapping
-        //ray('isOverlapping ? :'.!is_bool($this->redisLock));
-        return (is_bool($this->redisLock));
+        if (! $this->preventOverlapping) {
+            return false;
+        }
+
+        return $this->getRedisLock()->exists($this->overlapLockKey());
     }
 
     /**
@@ -282,35 +269,33 @@ class Job
      * This will prevent the Job from overlapping.
      * It prevents another instance of the same Job of
      * being executed if the previous is still running.
-     * The job id is used as a filename for the lock file.
+     * The job id is used as the Redis lock key.
      *
-     * @param  string    $tempDir          The directory path for the lock files
-     * @param  callable  $whenOverlapping  A callback to ignore job overlapping
+     * @param  string    $tempDir          Deprecated, kept for API compatibility
+     * @param  callable  $whenOverlapping  Deprecated, Redis locks use TTLs
+     * @param  int       $lockTtl          The Redis lock TTL in seconds
      * @return self
      */
-    public function onlyOne($tempDir = null, callable $whenOverlapping = null)
+    public function onlyOne($tempDir = null, callable $whenOverlapping = null, $lockTtl = 3600)
     {
-        if ($tempDir === null || ! is_dir($tempDir)) {
-            $tempDir = $this->tempDir;
-        }
+        $this->preventOverlapping = true;
+        $this->lockTtl = $this->normalizePositiveSeconds($lockTtl, 'Redis lock TTL');
 
-        $this->lockFile = implode('/', [
-            trim($tempDir),
-            trim($this->id) . '.lock',
-        ]);
+        // Redis locks are released by this PHP process, so locked jobs run foreground.
+        $this->inForeground();
 
-        if ($this->redLock!=null) {
-            $this->redisLock = $this->redLock->lock($this->id, 10000);
-        }
-        
+        return $this;
+    }
 
-        if ($whenOverlapping) {
-            $this->whenOverlapping = $whenOverlapping;
-        } else {
-            $this->whenOverlapping = function () {
-                return false;
-            };
-        }
+    /**
+     * Prevent the job from starting more than once in the given interval.
+     *
+     * @param  int  $seconds
+     * @return self
+     */
+    public function runAtMostEvery($seconds)
+    {
+        $this->cooldownTtl = $this->normalizePositiveSeconds($seconds, 'Cooldown');
 
         return $this;
     }
@@ -344,9 +329,6 @@ class Job
                 }
             }
         }
-
-       
-
         // Add the boilerplate to redirect the output to file/s
         if (count($this->outputTo) > 0) {
             $compiled .= ' | tee ';
@@ -357,18 +339,6 @@ class Job
 
             $compiled = trim($compiled);
         }
-
-        // Add boilerplate to remove lockfile after execution
-        if ($this->lockFile) {
-            $compiled .= '; rm ' . $this->lockFile;
-        }
-
-        /*
-        if ($this->redLock!=null && is_array($this->redisLock)) {
-            ray('unlock redis');
-            $this->redLock->unlock($this->redisLock);
-        }
-        */
 
         // Add boilerplate to run in background
         if ($this->canRunInBackground()) {
@@ -400,6 +370,10 @@ class Job
             $this->tempDir = $config['tempDir'];
         }
 
+        if (isset($config['redis'])) {
+            $this->redisLock = new RedisLock($config['redis']);
+        }
+
         return $this;
     }
 
@@ -428,57 +402,42 @@ class Job
             return false;
         }
 
-        // If overlapping, don't run
-        if ($this->isOverlapping()) {
-            return false;
+        $lock = false;
+
+        if ($this->preventOverlapping) {
+            $lock = $this->getRedisLock()->acquire($this->overlapLockKey(), $this->lockTtl);
+
+            if ($lock === false) {
+                return false;
+            }
         }
 
-        $compiled = $this->compile();
-
-        // Write lock file if necessary
-        $this->createLockFile();
-
-        if (is_callable($this->before)) {
-            call_user_func($this->before, $this);
-        }
-
-        if (is_callable($compiled)) {
-            $this->output = $this->exec($compiled);
-        } else {
-            exec($compiled, $this->output, $this->returnCode);
-        }
-
-        $this->finalise();
-
-        return true;
-    }
-
-    /**
-     * Create the job lock file.
-     *
-     * @param  mixed  $content
-     * @return void
-     */
-    private function createLockFile($content = null)
-    {
-        if ($this->lockFile) {
-            if ($content === null || ! is_string($content)) {
-                $content = $this->getId();
+        try {
+            if ($this->cooldownTtl !== null &&
+                ! $this->getRedisLock()->acquireCooldown($this->cooldownLockKey(), $this->cooldownTtl)
+            ) {
+                return false;
             }
 
-            file_put_contents($this->lockFile, $content);
-        }
-    }
+            $compiled = $this->compile();
 
-    /**
-     * Remove the job lock file.
-     *
-     * @return void
-     */
-    private function removeLockFile()
-    {
-        if ($this->lockFile && file_exists($this->lockFile)) {
-            unlink($this->lockFile);
+            if (is_callable($this->before)) {
+                call_user_func($this->before, $this);
+            }
+
+            if (is_callable($compiled)) {
+                $this->output = $this->exec($compiled);
+            } else {
+                exec($compiled, $this->output, $this->returnCode);
+            }
+
+            $this->finalise();
+
+            return true;
+        } finally {
+            if (is_array($lock)) {
+                $this->getRedisLock()->release($lock);
+            }
         }
     }
 
@@ -512,9 +471,51 @@ class Job
             }
         }
 
-        $this->removeLockFile();
-
         return $outputBuffer . (is_string($returnData) ? $returnData : '');
+    }
+
+    /**
+     * @return RedisLock
+     */
+    private function getRedisLock()
+    {
+        if (! $this->redisLock) {
+            throw new InvalidArgumentException('Redis configuration is required for job locks.');
+        }
+
+        return $this->redisLock;
+    }
+
+    /**
+     * @return string
+     */
+    private function overlapLockKey()
+    {
+        return 'locks:' . $this->id;
+    }
+
+    /**
+     * @return string
+     */
+    private function cooldownLockKey()
+    {
+        return 'cooldowns:' . $this->id;
+    }
+
+    /**
+     * @param  int|string  $seconds
+     * @param  string      $label
+     * @return int
+     */
+    private function normalizePositiveSeconds($seconds, $label)
+    {
+        $seconds = (int) $seconds;
+
+        if ($seconds < 1) {
+            throw new InvalidArgumentException($label . ' must be at least 1 second.');
+        }
+
+        return $seconds;
     }
 
     /**
@@ -576,7 +577,7 @@ class Job
 
         // Call any callback defined
         if (is_callable($this->after)) {
-            call_user_func($this->after, $this, $this->output, $this->returnCode);
+            call_user_func($this->after, $this->output, $this->returnCode);
         }
     }
 

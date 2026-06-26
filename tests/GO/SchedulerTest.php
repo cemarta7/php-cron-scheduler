@@ -5,6 +5,7 @@ use DateTime;
 use GO\FailedJob;
 use GO\Scheduler;
 use PHPUnit\Framework\TestCase;
+use Tests\FakeRedis;
 
 class SchedulerTest extends TestCase
 {
@@ -45,7 +46,7 @@ class SchedulerTest extends TestCase
 
         unlink($bin);
 
-        $this->assertEquals($bin . ' ' . $script, $job->compile());
+        $this->assertEquals(escapeshellarg($bin) . ' ' . escapeshellarg($script), $job->compile());
     }
 
     public function testShouldUseSystemPhpBinIfCustomBinDoesNotExist()
@@ -58,8 +59,8 @@ class SchedulerTest extends TestCase
 
         $job = $scheduler->php($script, $bin)->inForeground();
 
-        $this->assertNotEquals($bin . ' ' . $script, $job->compile());
-        $this->assertEquals(PHP_BINARY . ' ' . $script, $job->compile());
+        $this->assertNotEquals(escapeshellarg($bin) . ' ' . escapeshellarg($script), $job->compile());
+        $this->assertEquals(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script), $job->compile());
     }
 
     public function testShouldThrowExceptionIfScriptIsNotAString()
@@ -329,6 +330,29 @@ class SchedulerTest extends TestCase
         $scheduler->run();
 
         $this->assertCount(1, $scheduler->getExecutedJobs(), 'Number of executed jobs');
+    }
+
+    public function testShouldNotTrackSkippedJobsAsExecuted()
+    {
+        $scheduler = new Scheduler([
+            'redis' => ['client' => new FakeRedis()],
+        ]);
+
+        $runs = 0;
+
+        $scheduler->call(function () use (&$runs) {
+            $runs++;
+        }, [], 'cooldown-scheduler-job')->runAtMostEvery(300);
+
+        $scheduler->run();
+
+        $this->assertCount(1, $scheduler->getExecutedJobs(), 'Number of executed jobs');
+
+        $scheduler->resetRun();
+        $scheduler->run();
+
+        $this->assertCount(0, $scheduler->getExecutedJobs(), 'Number of executed jobs');
+        $this->assertEquals(1, $runs);
     }
 
     public function testClearJobs()

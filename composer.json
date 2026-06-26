@@ -26,7 +26,8 @@
         "swiftmailer/swiftmailer": "~5.4 || ^6.0"
     },
     "suggest": {
-        "swiftmailer/swiftmailer": "Required to send the output of a job to email address/es (~5.4 || ^6.0)."
+        "swiftmailer/swiftmailer": "Required to send the output of a job to email address/es (~5.4 || ^6.0).",
+        "ext-redis": "Required to use Redis-backed overlap locks and cooldowns."
     },
     "autoload": {
         "psr-4": {

@@ -324,40 +324,53 @@ The jobs that are due to run are being ordered by their execution: jobs that can
 
 ### Schedules overlapping
 
-To prevent the execution of a schedule while the previous execution is still in progress, use the method `onlyOne`. To avoid overlapping, the Scheduler needs to create **lock files**.
-By default it will be used the directory path used for temporary files.
+To prevent the execution of a schedule while the previous execution is still in progress, use the method `onlyOne`. To avoid overlapping across multiple servers, the Scheduler uses **Redis locks**.
 
-You can specify a custom directory path globally, when creating a new Scheduler instance.
+Configure Redis globally when creating a new Scheduler instance.
 
 ```php
 $scheduler = new Scheduler([
-    'tempDir' => 'path/to/my/tmp/dir'
+    'redis' => [
+        'host' => '127.0.0.1',
+        'port' => 6379,
+        'timeout' => 1.5,
+        'prefix' => 'cron-scheduler:',
+    ],
 ]);
 
 $scheduler->php('script.php')->onlyOne();
 ```
 
-Or you can define the directory path on a job per job basis.
+Or configure Redis on a job per job basis.
 
 ```php
 $scheduler = new Scheduler();
 
-// This will use the default directory path
-$scheduler->php('script.php')->onlyOne();
-
-$scheduler->php('script.php')->onlyOne('path/to/my/tmp/dir');
-$scheduler->php('other_script.php')->onlyOne('path/to/my/other/tmp/dir');
+$scheduler->php('script.php')->configure([
+    'redis' => [
+        'host' => '127.0.0.1',
+        'port' => 6379,
+    ],
+])->onlyOne();
 ```
 
-In some cases you might want to run the job also if it's overlapping.
-For example if the last execution was more that 5 minutes ago.
-You can pass a function as a second parameter, the last execution time will be injected.
-The job will not run until this function returns `false`. If it returns `true`, the job will run if overlapping.
+You can optionally pass a lock TTL in seconds as the third parameter. This protects you from a stale lock if the process dies before releasing it.
 
 ```php
-$scheduler->php('script.php')->onlyOne(null, function ($lastExecutionTime) {
-    return (time() - $lastExecutionTime) > (60 * 5);
-});
+$scheduler->php('script.php')->onlyOne(null, null, 60 * 30);
+```
+
+Locked jobs run in foreground so the same PHP process that acquired the Redis token can safely release it after the job finishes.
+
+### Schedule execution cooldown
+
+In some cases you might want to prevent a job from starting again too soon even if it is not currently overlapping.
+Use `runAtMostEvery` to set a Redis-backed cooldown in seconds.
+
+```php
+$scheduler->php('script.php')
+    ->onlyOne()
+    ->runAtMostEvery(60 * 5);
 ```
 
 ### Before job execution

@@ -7,7 +7,7 @@ class JobOutputFilesTest extends TestCase
 {
     public function testShouldWriteCommandOutputToSingleFile()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $job = new Job($command);
         $outputFile = __DIR__ . '/../tmp/output.log';
 
@@ -28,7 +28,7 @@ class JobOutputFilesTest extends TestCase
 
     public function testShouldWriteCommandOutputToMultipleFiles()
     {
-        $command = PHP_BINARY . ' ' . __DIR__ . '/../test_job.php';
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/../test_job.php');
         $job = new Job($command);
         $outputFile1 = __DIR__ . '/../tmp/output1.log';
         $outputFile2 = __DIR__ . '/../tmp/output2.log';
