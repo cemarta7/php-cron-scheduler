@@ -4,6 +4,10 @@ class FakeRedis
 {
     public $values = [];
 
+    public $options = [];
+
+    public $history = [];
+
     public function set($key, $value, $options = null)
     {
         if (is_array($options) && in_array('nx', $options, true) && isset($this->values[$key])) {
@@ -11,6 +15,12 @@ class FakeRedis
         }
 
         $this->values[$key] = $value;
+        $this->options[$key] = $options;
+        $this->history[] = [
+            'key' => $key,
+            'value' => $value,
+            'options' => $options,
+        ];
 
         return true;
     }
@@ -27,6 +37,7 @@ class FakeRedis
 
         if (isset($this->values[$key]) && $this->values[$key] === $token) {
             unset($this->values[$key]);
+            unset($this->options[$key]);
 
             return 1;
         }

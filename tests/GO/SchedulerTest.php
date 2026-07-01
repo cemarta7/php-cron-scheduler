@@ -355,6 +355,53 @@ class SchedulerTest extends TestCase
         $this->assertEquals(1, $runs);
     }
 
+    public function testShouldApplyOnlyOneToAllJobsFromSchedulerConfig()
+    {
+        $redis = new FakeRedis();
+        $scheduler = new Scheduler([
+            'redis' => ['client' => $redis],
+            'onlyOne' => true,
+        ]);
+
+        $secondJob = null;
+        $secondRun = null;
+
+        $firstJob = $scheduler->call(function () use (&$secondJob, &$secondRun) {
+            $secondRun = $secondJob->run();
+        }, [], 'shared-global-lock');
+
+        $secondJob = $scheduler->call(function () {
+            return true;
+        }, [], 'shared-global-lock');
+
+        $this->assertTrue($firstJob->run());
+        $this->assertFalse($secondRun);
+    }
+
+    public function testShouldApplyConfiguredLockTtlToGlobalOnlyOneJobs()
+    {
+        $redis = new FakeRedis();
+        $scheduler = new Scheduler([
+            'redis' => ['client' => $redis],
+            'onlyOne' => true,
+            'lockTtl' => 123,
+        ]);
+
+        $secondJob = null;
+
+        $firstJob = $scheduler->call(function () use (&$secondJob) {
+            $secondJob->run();
+        }, [], 'global-lock-ttl');
+
+        $secondJob = $scheduler->call(function () {
+            return true;
+        }, [], 'global-lock-ttl');
+
+        $this->assertTrue($firstJob->run());
+        $this->assertEquals('php-cron-scheduler:locks:global-lock-ttl', $redis->history[0]['key']);
+        $this->assertEquals(['nx', 'ex' => 123], $redis->history[0]['options']);
+    }
+
     public function testClearJobs()
     {
         $scheduler = new Scheduler();

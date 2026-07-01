@@ -341,6 +341,24 @@ $scheduler = new Scheduler([
 $scheduler->php('script.php')->onlyOne();
 ```
 
+If every job in the scheduler should use Redis overlap protection by default, set `onlyOne` globally.
+
+```php
+$scheduler = new Scheduler([
+    'redis' => [
+        'host' => '127.0.0.1',
+        'port' => 6379,
+        'timeout' => 1.5,
+        'prefix' => 'cron-scheduler:',
+    ],
+    'onlyOne' => true,
+    'lockTtl' => 60 * 30,
+]);
+
+$scheduler->php('script.php');
+$scheduler->php('other_script.php');
+```
+
 Or configure Redis on a job per job basis.
 
 ```php

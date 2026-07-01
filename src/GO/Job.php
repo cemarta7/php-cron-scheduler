@@ -374,6 +374,11 @@ class Job
             $this->redisLock = new RedisLock($config['redis']);
         }
 
+        if (isset($config['onlyOne']) && $config['onlyOne'] === true) {
+            $lockTtl = isset($config['lockTtl']) ? $config['lockTtl'] : $this->lockTtl;
+            $this->onlyOne(null, null, $lockTtl);
+        }
+
         return $this;
     }
 
