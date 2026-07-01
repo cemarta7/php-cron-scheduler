@@ -353,6 +353,30 @@ class SchedulerTest extends TestCase
 
         $this->assertCount(0, $scheduler->getExecutedJobs(), 'Number of executed jobs');
         $this->assertEquals(1, $runs);
+        $this->assertMatchesRegularExpression('/Skipping Closure: cooldown$/', $scheduler->getVerboseOutput());
+    }
+
+    public function testShouldLogSkippedJobsWhenOverlapping()
+    {
+        $redis = new FakeRedis();
+        $redis->set('php-cron-scheduler:locks:overlapping-scheduler-job', 'token', ['nx', 'ex' => 60]);
+
+        $scheduler = new Scheduler([
+            'redis' => ['client' => $redis],
+            'onlyOne' => true,
+        ]);
+
+        $runs = 0;
+
+        $scheduler->call(function () use (&$runs) {
+            $runs++;
+        }, [], 'overlapping-scheduler-job');
+
+        $scheduler->run();
+
+        $this->assertCount(0, $scheduler->getExecutedJobs(), 'Number of executed jobs');
+        $this->assertEquals(0, $runs);
+        $this->assertMatchesRegularExpression('/Skipping Closure: overlapping$/', $scheduler->getVerboseOutput());
     }
 
     public function testShouldApplyOnlyOneToAllJobsFromSchedulerConfig()

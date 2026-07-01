@@ -176,6 +176,8 @@ class Scheduler
                 try {
                     if ($job->run()) {
                         $this->pushExecutedJob($job);
+                    } else {
+                        $this->pushSkippedJob($job);
                     }
                 } catch (\Exception $e) {
                     $this->pushFailedJob($job, $e);
@@ -226,14 +228,22 @@ class Scheduler
     {
         $this->executedJobs[] = $job;
 
-        $compiled = $job->compile();
+        $this->addSchedulerVerboseOutput("Executing {$this->getJobDescription($job)}");
 
-        // If callable, log the string Closure
-        if (is_callable($compiled)) {
-            $compiled = 'Closure';
-        }
+        return $job;
+    }
 
-        $this->addSchedulerVerboseOutput("Executing {$compiled}");
+    /**
+     * Log a skipped job.
+     *
+     * @param  Job  $job
+     * @return Job
+     */
+    private function pushSkippedJob(Job $job)
+    {
+        $reason = $job->getLastSkipReason() ?: 'not runnable';
+
+        $this->addSchedulerVerboseOutput("Skipping {$this->getJobDescription($job)}: {$reason}");
 
         return $job;
     }
@@ -259,16 +269,27 @@ class Scheduler
     {
         $this->failedJobs[] = new FailedJob($job, $e);
 
+        $this->addSchedulerVerboseOutput("{$e->getMessage()}: {$this->getJobDescription($job)}");
+
+        return $job;
+    }
+
+    /**
+     * Get the job description for verbose output.
+     *
+     * @param  Job  $job
+     * @return string
+     */
+    private function getJobDescription(Job $job)
+    {
         $compiled = $job->compile();
 
         // If callable, log the string Closure
         if (is_callable($compiled)) {
-            $compiled = 'Closure';
+            return 'Closure';
         }
 
-        $this->addSchedulerVerboseOutput("{$e->getMessage()}: {$compiled}");
-
-        return $job;
+        return $compiled;
     }
 
     /**

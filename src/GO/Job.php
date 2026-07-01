@@ -116,6 +116,13 @@ class Job
     private $returnCode = 0;
 
     /**
+     * Reason the last run attempt was skipped.
+     *
+     * @var string|null
+     */
+    private $lastSkipReason;
+
+    /**
      * Files to write the output of the job.
      *
      * @var array
@@ -402,8 +409,11 @@ class Job
      */
     public function run()
     {
+        $this->lastSkipReason = null;
+
         // If the truthTest failed, don't run
         if ($this->truthTest !== true) {
+            $this->lastSkipReason = 'truth test failed';
             return false;
         }
 
@@ -413,6 +423,7 @@ class Job
             $lock = $this->getRedisLock()->acquire($this->overlapLockKey(), $this->lockTtl);
 
             if ($lock === false) {
+                $this->lastSkipReason = 'overlapping';
                 return false;
             }
         }
@@ -421,6 +432,7 @@ class Job
             if ($this->cooldownTtl !== null &&
                 ! $this->getRedisLock()->acquireCooldown($this->cooldownLockKey(), $this->cooldownTtl)
             ) {
+                $this->lastSkipReason = 'cooldown';
                 return false;
             }
 
@@ -477,6 +489,16 @@ class Job
         }
 
         return $outputBuffer . (is_string($returnData) ? $returnData : '');
+    }
+
+    /**
+     * Get the reason the previous run attempt was skipped.
+     *
+     * @return string|null
+     */
+    public function getLastSkipReason()
+    {
+        return $this->lastSkipReason;
     }
 
     /**

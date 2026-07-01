@@ -380,6 +380,28 @@ $scheduler->php('script.php')->onlyOne(null, null, 60 * 30);
 
 Locked jobs run in foreground so the same PHP process that acquired the Redis token can safely release it after the job finishes.
 
+Skipped jobs are written to the scheduler verbose output. You can send this to your application logs after each scheduler run.
+
+```php
+$scheduler->run();
+error_log($scheduler->getVerboseOutput());
+```
+
+When Redis prevents a job from starting, the verbose output will include messages like:
+
+```text
+[2026-06-30T12:00:00+00:00] Skipping Closure: overlapping
+[2026-06-30T12:05:00+00:00] Skipping /usr/bin/php script.php: cooldown
+```
+
+In production, you can also inspect Redis directly. With the default prefix, active overlap locks use `php-cron-scheduler:locks:<job-id>` and cooldown keys use `php-cron-scheduler:cooldowns:<job-id>`.
+
+```sh
+redis-cli --scan --pattern 'php-cron-scheduler:locks:*'
+redis-cli ttl 'php-cron-scheduler:locks:import-users'
+redis-cli ttl 'php-cron-scheduler:cooldowns:import-users'
+```
+
 ### Schedule execution cooldown
 
 In some cases you might want to prevent a job from starting again too soon even if it is not currently overlapping.
